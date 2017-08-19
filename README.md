@@ -1,7 +1,7 @@
 
-***deeptext***
+# ***deeptext***
 
-*Deep Learning Toolkit for Domain-Specific Text Generation*
+**Deep Learning Toolkit for Domain-Specific Text Generation**
 
 -------
 
@@ -22,18 +22,23 @@ This is different from the char-rnn family of things out there, where bodies of 
 heterogeneous parts mashed into one giant endless flowing stream.  *deeptext*, instead, is about homogeneous collections
 of tweets, titles, etc. which are modelled as separate instances rather than parts of an endless flow.
 
-If you can collect a few hundred KB of your own message instances into a file, one message per line, you can create models of
+If you can collect at least few hundred KB of your own message instances into a file, one message per line, you can create models of
 your messages from the command line, and test your model to see if it "gets it".  You can subsequently use Python
 services to hallucinate new instances in various ways.
 
-I'm using this to build a deep POTUS (given a hypothetical scenario where the President's most visible manifestation
+I'm using *deeptext* to build a deep POTUS (given a hypothetical scenario where the President's most visible manifestation
 is his twitter stream);  and a deep blogger (re-imagining an existing blog, generating a new one as output).
+
+If you're doing something where re-imagining text would be useful, and this stuff would help, that's great.
 
 -------
 
 # Example
 
-There are 3 models in this repository that I use for testing.  One is a collection of over 100,000 famous quotations
+Let's make this more concrete with an example.  As it happens, *deeptext* comes with 3 models I use for testing.
+You can use them with *deeptext* right out of the box to try out the tools on some pre-trained models.
+
+One of the 3 models is a collection of over 100,000 famous quotations
 collected from a number of sources.  These were placed in a *message collection* with one quotation per line, in the
 form "Author Name : Wise Words".
 
@@ -79,31 +84,78 @@ On that note, one more quotation:
 
 -------
 
-# Installing *deeptext*
+## Approach Used by *deeptext*
+
+*deeptext* uses bash, Python 3, and Keras.  I've only tested with TensorFlow so far, but
+I'm hoping to get this all running with CNTK, given that its LSTM training performance is
+apparently so much better.
+
+I'm developing it on Ubuntu 16.04, and have every reason to believe that it would work
+fine on whatever Linux or on a Mac.  If you're on Windows, I'm afraid all I can offer
+you at the moment are my condolences.
+
+The *newmodel* script is used to create a new model.  Details are provided below;  but
+in summary at this point you provide a data file (one "message" per line) and some short
+descriptive text, as well as some simple network topology, and training will begin.
+
+"Simple network topology" means sequence length (n) & number of LSTM units per layer (m).  I'll construct
+a network with two LSTM layers, each with m units.  The network will take n input characters and produce
+a multinomial probability distribution for the next character.  Each LSTM layer has a dropout ratio of 
+0.3 because that's what the cool kids do. 
+
+Although *newmodel* starts the training process, training is usually so long that you might need to
+stop it and restart it some number of times.  Once *newmodel* has created an initial model, feel free
+to croak it;  you can always resume training using the *study* command.
+
+Various tools, such as *improv*, will use the model to do useful things, like generating random messages based
+on the model (as in the example above);  or generating random completions for a message you start;  or providing
+alternate completions for messages found in the training set.  Depending on your recreational drug preference,
+each of these tasks is potentially entertaining.
+
+Models are saved as 3 files in their own directory... normally a subdirectory of the *models* directory.  Your
+model directory is named when newmodel is invoked.  The 3 model files are
+ - A txt file containing your training data.  This file is created by newmodel and is used (among other things)
+   for continuing training later.  Yeah, I know it is probably redundant, but it's proven very handy to keep this
+   here so you don't have to worry if you're using the right version of the data later... and so forth.
+ - A json file containing model properties, such as various titles and descriptions, topology, etc.
+ - An hdf5 file containing model weights.
+
+The training process scopes out your training data, then starts out the process with a relatively small
+number of samples (like 20,000) so you can quickly get a model that starts to work.  If there's any sign
+of overtraining, it will double the number of samples for the next epoch, and continue with that until
+there's overtraining again... then double again and so forth.  I've found this approach to training to
+be handy for training on wimpy machines without GPU's.
+
+I think that's about all I need to say about the approach, and I hope you agree, although to be frank, 
+at this stage your vote doesn't count.
+
+-------
+
+## Installing *deeptext*
 
 TODO
 
 -------
 
-# Directory Structure
+## Directory Structure
 
 TODO
 
 -------
 
-# Command Line Tools
+## Command Line Tools
 
 TODO
 
 -------
 
-# Example Models
+## Example Models
 
 TODO
 
 -------
 
-# Coding Examples
+## Coding Examples
 
 TODO
 
