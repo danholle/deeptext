@@ -4,16 +4,8 @@
 
 *Experiments in neural message generation*
 
-
--------
-
-
-It is fascinating what you get when you feed collections of text into a Deep Learning algorithm.  There is this 
-alien intelligence which learns in a remarkable way:  remarkable in what it *does* learn, and remarkable in
-what it does *not* learn.
-
-This is a playground for tools for creating, manipulating, analyzing, and using domain-specific training
-material comprised of *message collections* for a domain of your choosing.  
+Here you will find a set of tools for creating, manipulating, analyzing, testing, and using 
+deep learning text models trained from *message collections* for a domain of your choosing.  
 By "message collection", I mean collections of things like
  * tweets
  * document titles
@@ -24,36 +16,27 @@ By "message collection", I mean collections of things like
 In all these examples, the message is relatively short; is meaningful in isolation; and they conform to some sort of 
 syntactic and semantic pattern which we'd like to automatically learn, so we could generate plausible new messages 
 which fit these patterns.
-This is different from the char-rnn family of things out there, where bodies of text are one giant endless flowing 
-amalgam.  *deeptext*, instead, is about imagining new tweets, new titles, new jokes, and new quotations based on past ones.
+This is different from the char-rnn family of things out there, where bodies of text are often collection of 
+heterogeneous parts mashed into one giant endless flowing stream.  *deeptext*, instead, is about homogeneous collections
+of tweets, titles, etc. which are modelled as separate instances rather than parts of an endless flow.
 
-This project contains tools for building LSTM models of these message collections, and viewing what they're "thinking".  
-It includes a few example models (headlines, quotations and jokes).  Elsewhere, I'm working on other projects for Deep President 
-(in a purely fictitious world where the main thing a President does is tweet);  and Deep Blog (generating a re-imagined 
-blog from an existing one).
+If you can collect a few hundred KB of your own message instances into a file, one message per line, you can create models of
+your messages from the command line, and test your model to see if it "gets it".  You can subsequently use Python
+services to hallucinate new instances in various ways.
 
-Let the games begin.
-
+I'm using this to build a deep POTUS (given a hypothetical scenario where the President's most visible manifestation
+is his twitter stream);  and a deep blogger (re-imagining an existing blog, generating a new one as output).
 
 -------
 
+# Example
 
-I've got a lot of writing to do... to give you more context, to help you set
-up an environment where you can use this stuff, a summary of commands, etc.
+There are 3 models in this repository that I use for testing.  One is a collection of over 100,000 famous quotations
+collected from a number of sources.  These were placed in a *message collection* with one quotation per line, in the
+form "Author Name : Wise Words".
 
-But I thought it would be best to get something on github first, then embellish
-this README, rather than waiting for that magic moment of perfection.
-
-Meanwhile, however, here's a little taster. 
-
-I mentioned that there are 3 test models (with associated training data) here.  One of them is
-a large collection of famous quotations.  Each line in the training data is a "message" of the form "author : wise words", and there's
-over 100,000 of them in the training set.
-
-Using the newmodel and study tools, I created a model of these quotations over a period of about a day on my laptop.  Under the
-covers, the alien brain has 2 LSTM layers of 300 units each, with a sequence length of 60 characters.
-
-Using the improv tool, I asked the alien brain to imagine some new quotations.  Here is the output it generated:
+I used the *newmodel* command (with subsequent *study* commands) to create a model in models/quotes.  To see how the 
+model was doing, I used the *improv* command to generate a few random quotes.  Here's what it came up with:
 
       Improvising some random quotations:
 
@@ -78,23 +61,47 @@ grammar, etc.) all just by looking at a load of character strings.
 
 Pretty bizarre, I'd say.
 
+-------
+
+There's a lot more stuff I need to write here, including
+ - Documenting how to set up your own *deeptext* instance
+ - Documenting commands
+ - Documenting example models
+ - Giving coding examples
+
+But I thought it would be best to get this out there, then add these parts as time permits.
+
 On that note, one more quotation:
 
        -- Arnold Schwarzenegger : I'll be back!
 
-
 -------
 
+# Installing *deeptext*
+
+TODO
+
+-------
 
 # Directory Structure
 
 TODO
 
+-------
+
+# Command Line Tools
+
+TODO
 
 -------
 
+# Example Models
 
-# Command Line Tools
+TODO
+
+-------
+
+# Coding Examples
 
 TODO
 
