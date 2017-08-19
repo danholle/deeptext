@@ -1,0 +1,62 @@
+#!/bin/bash
+
+#  bash/improv <modeldir>
+
+echo " "
+ok=1
+if [ "$#" -ge 1 ] && [ "$#" -le 3 ]
+then
+  if [ -d models/$1 ] && [ -f models/$1/properties.json ]
+  then
+    echo "Let's have some fun with the model in models/$1."
+    args=" -modeldir models/$1 -temperature 1.0 -pratio 0.3 "
+    if [ "$#" -eq 1 ]
+    then
+      args=$args -primetext ""
+    elif [ "$#" -eq 2 ] && [ "$2" -eq "rewrite" ]
+    then
+      args=$args
+    elif [ "$#" -eq 3 ] && [ "$2" -eq "primed" ]
+    then
+      args=$args -primetext "$3" 
+    else
+      ok=0
+      echo "... um, I didn't understand $2 $3 ..."
+    fi
+  else
+    echo "There does not appear to be a model in models/$1 yet."
+    echo "You may want to create one with bash/newmodel."
+    echo "FYI, here's a description of the improv command..."
+    ok=0
+  fi
+else 
+  ok=0
+  echo "Wrong number of args.  Back to school for you!"
+fi
+
+if [ "$ok" -eq 0 ]
+then
+  echo " "
+  echo "bash/improv uses a model to generate random (but hopefully plausible)"
+  echo "messages that mimic the messages used to train that model."
+  echo "Example:"
+  echo " "
+  echo "    bash/improv quotes"
+  echo " "
+  echo "This uses the quotes model (in models/jokes) to improvise a few quotes"
+  echo "that fit the model (however advanced, or not, it might be just now)."
+  echo " "
+  echo "    bash/improv quotes rewrite"
+  echo " "
+  echo "This takes existing quotes from the training set and tries to rewrite them."
+  echo " "
+  echo "    bash/improv quotes primed \"blah blah\""
+  echo " "
+  echo "This generates quotes which start with \"blah blah\"."
+  echo " "
+else
+  echo "args = $args "
+  nice -10 python/improv.py $args
+  echo " "
+fi
+

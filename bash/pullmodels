@@ -1,0 +1,7 @@
+#!/bin/bash
+rm -rf models
+cp -a ~/Dropbox/deeptext/models models
+ls -l models/headlines
+ls -l models/jokes
+ls -l models/quotes
+

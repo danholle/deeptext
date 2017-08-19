@@ -1,0 +1,37 @@
+#!/bin/bash
+
+#  bash/study <modeldir>
+
+echo " "
+ok=1
+if [ "$#" -eq 1 ]
+then
+  if [ -d models/$1 ] && [ -f models/$1/properties.json ]
+  then
+    echo "Resuming training of model in the models/$1 directory."
+  else
+    echo "There does not appear to be a model in models/$1 yet."
+    echo "You may want to create one with bash/newmodel."
+    echo "FYI, here's a description of the study command..."
+    ok=0
+  fi
+else 
+  ok=0
+  echo "Wrong number of args.  Back to school for you!"
+fi
+
+if [ "$ok" -eq 0 ]
+then
+  echo " "
+  echo "bash/study continues training a neural model that's already been created."
+  echo "Example:"
+  echo " "
+  echo "    bash/study jokes"
+  echo " "
+  echo "This continues the training of the model of jokes found in models/jokes."
+  echo " "
+else
+  echo " "
+  nice -10 python/study.py -modeldir models/$1
+fi
+

@@ -1,0 +1,39 @@
+#!/bin/bash
+
+#  bash/newmodel <modeldir> <msgsfn> <hidden> <seqlen> <label> <description>
+
+echo " "
+ok=1
+if [ "$#" -eq 6 ]
+then
+  if [ -f $2 ]
+  then
+    echo "We are creating a model of $5 using training data in $2."
+    echo "Description: $6"
+    echo "Model topology:  2xLSTM($3);  seqlen $4."
+    echo "Model will be saved in models/$1."
+  else
+    echo "I was expecting to find your message collection at $2, but... no."
+    ok=0
+  fi
+else 
+  ok=0
+  echo "Wrong number of args.  Back to school for you!"
+fi
+
+if [ "$ok" -eq 0 ]
+then
+  echo " "
+  echo "bash/newmodel creates neural model from a collection of sample messages"
+  echo "that can subsequently be used by other tools to generate text that "
+  echo "resembles messages in the collection.  Usage:"
+  echo " "
+  echo "    bash/newmodel <modeldir> <msgsfn> <hidden> <seqlen> <label> <description>"
+  echo " "
+  echo "I should write descriptions of these args, but I am too lazy right now."
+  echo " "
+else
+  echo " "
+  nice -10 python/newmodel.py -modeldir models/$1 -msgsfn $2 -hidden $3 -seqlen $4 -label "$5" -description "$6"
+fi
+
