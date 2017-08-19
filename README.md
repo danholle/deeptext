@@ -1,12 +1,13 @@
 
 ***deeptext***
-==============
 
-*Experiments in neural message generation*
+*Deep Learning Toolkit for Domain-Specific Text Generation*
+
+-------
 
 Here you will find a set of tools for creating, manipulating, analyzing, testing, and using 
-deep learning text models trained from *message collections* for a domain of your choosing.  
-By "message collection", I mean collections of things like
+deep learning text models trained from *message collections* for a domain of your choosing.  By 
+"message collection", I mean collections of things like
  * tweets
  * document titles
  * headlines
@@ -16,6 +17,7 @@ By "message collection", I mean collections of things like
 In all these examples, the message is relatively short; is meaningful in isolation; and they conform to some sort of 
 syntactic and semantic pattern which we'd like to automatically learn, so we could generate plausible new messages 
 which fit these patterns.
+
 This is different from the char-rnn family of things out there, where bodies of text are often collection of 
 heterogeneous parts mashed into one giant endless flowing stream.  *deeptext*, instead, is about homogeneous collections
 of tweets, titles, etc. which are modelled as separate instances rather than parts of an endless flow.
