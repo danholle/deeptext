@@ -33,7 +33,7 @@ If you're doing something where re-imagining text would be useful, and this stuf
 
 -------
 
-# Example
+## Example
 
 Let's make this more concrete with an example.  As it happens, *deeptext* comes with 3 models I use for testing.
 You can use them with *deeptext* right out of the box to try out the tools on some pre-trained models.

@@ -2,8 +2,6 @@
 
 """Create LSTM model from a message collection."""
 
-# TODO sample:  we should not ever get here!
-
 from keras.models import Sequential
 from keras.layers import Activation, Dense, LSTM, Dropout
 from keras.optimizers import RMSprop
@@ -76,40 +74,44 @@ class cortex(object):
       
       self.epochs=0
       self.samples=0
-      self.vloss=100.0
-      self.tloss=100.0
 
+      self.valcnt=10000
+      self.valavg=math.log(self.vocabsize)
+      self.valsd=self.valavg*0.05
+      self.progress="..."
+      self.remodel()
       self.savemsgs()
       self.saveproperties()
+      self.valsamps=[]
     elif (hidden is None and seqlen is None and vocab is None
     and interleave is None and label is None and description is
     None and msgs is None):
       # Reading existing model from modeldir 
       self.loadproperties()
+      self.remodel()
+      self.loadweights()
       self.loadmsgs()
+      self.valsamps=[]
+      self.validate()
     else:
       print("cortex:  Invalid constructor.  Specify all or none.")
       exit()
     # end if / breaking out on constructor type
     
+  # end def __init__
+
+
+  def remodel(self):
+    """Build the model structure in Keras"""
     self.model=Sequential()
     self.model.add(LSTM(self.hidden, return_sequences=True,
         input_shape=(self.seqlen,self.vocabsize)))
-    self.model.add(Dropout(0.3))
+    self.model.add(Dropout(0.2))
     self.model.add(LSTM(self.hidden))
-    self.model.add(Dropout(0.3))
+    self.model.add(Dropout(0.2))
     self.model.add(Dense(self.vocabsize,activation='softmax'))
     self.model.compile(loss='categorical_crossentropy', optimizer='adam')
-    #self.model.add(Dense(self.vocabsize))
-    #self.model.add(Activation("softmax"))
-    #optimizer=RMSprop(lr=0.01)
-    #self.model.compile(loss="categorical_crossentropy",optimizer=optimizer)
-
-
-    # If there are weights out there, load them.
-    self.loadweights()
-
-  # end def __init__
+  # end def remodel
 
 
   def gensamples(self):
@@ -128,12 +130,11 @@ class cortex(object):
     fails=0
     while True:
       print('-' * 50)
-      print("Epoch {}:  2xLSTM({}), seqlen {}, train {:,d}, interleave {}"
-          .format(1+self.epochs,self.hidden,self.seqlen,self.seqcnt,self.interleave))
-
-      print("Vectorizing...",end="")
-      print("\r",end="")
       tcnt=(self.seqcnt+self.interleave-1)//self.interleave
+      print("Epoch {}:  2xLSTM({}), seqlen {}, interleave {} ({:,d} training samples)"
+          .format(1+self.epochs,self.hidden,self.seqlen,self.interleave,tcnt))
+
+      flashline("Vectorizing...")
       random.shuffle(self.deck)
       X=np.zeros((tcnt,self.seqlen,self.vocabsize),dtype=np.bool)
       y=np.zeros((tcnt,self.vocabsize),dtype=np.bool)
@@ -146,78 +147,101 @@ class cortex(object):
           y[tno,self.ch2ix[outch]]=1
           tno+=1
         seqno+=1
-      hist=self.model.fit(X, y, batch_size=100, validation_split=0.2,
-          epochs=1)
-      eloss=self.estloss()
-      print("Independent model loss assessment:",eloss)
-      self.epochs+=1
-      self.samples+=tcnt
+      oneliner("... Training "+self.label
+          +" model with starting loss {:0.3f}".format(self.valavg))
 
-      # Look at training and validation loss, past and present.
-      # Use these to decide things like:
-      #  -  Should I save the model?
-      #  -  Do I need finer-grained training data?
-      # There are some mysteries here.  For example, training loss is often
-      # larger than validation loss.  Regularly.  Seems strange. 
-      # 
-      # When do go finer-grained?
-      #  - If two soft fails in a row, or one hard fail.
-      # When do we save the model?
-      #  - No hard fail, and
-      #  - Validation improved (or, if virgin, no soft fail)
-      vloss=hist.history['val_loss'][0]
-      tloss=hist.history['loss'][0]
-      failtype=0
-      if self.vloss:
-        if self.vloss<=vloss:
-          print("Looks like we're overfitting.")
-          failtype=2
-        elif self.tloss>tloss:
-          print("We're making progress:  both training and validation set improved.")
-          ratio=(self.tloss-tloss)/(self.vloss-vloss)
-          if ratio>3.0 and tloss<vloss:
-            print("But training improved WAY more.  Overfitting.")
-            failtype=2
-          elif ratio>2.0:
-            print("Training improved a lot more.  Hmmm...")
-            failtype=1
-        else: # validation improved but training did not?!
-          print("Training process is wandering.")
-          failtype=1
+      ptprefit=time.process_time()
+      hist=self.model.fit(X, y, batch_size=128, epochs=1)
+      ptpostfit=time.process_time()
+      oneliner("... Training took {:0.3f} process seconds."
+          .format(ptpostfit-ptprefit))
+
+      # Well, okay, that was the hard part.  Now we compute validation
+      # loss (and its SD!) and proceed as follows:
+      #  1.  If we've improved by more than 1 SD, life is good.  We 
+      #      save everything and keep on trucking.
+      #  2.  If we've regressed by more than 1 SD, life is shit.  We
+      #      restore the last model and double the number of training
+      #      samples (halve the interleave) if we can.  If we can't,
+      #      we give up.
+      #  3.  If we are muddling in the middle, then we double the 
+      #      validation size, recompute validation loss, and save
+      #      everything as if we were doing #1.  If we can't, we also
+      #      give up.
+      preavg=self.valavg
+      presd=self.valsd
+      precnt=self.valcnt
+      prech=self.progress[-1:]
+      
+      ptpreval=time.process_time()
+      ecnt,eavg,esd=self.validate()
+      ptpostval=time.process_time()
+      
+      oneliner("New model loss {:0.3f} (sd {:0.3f}) based on {} samples in {:0.3f} seconds."
+          .format(eavg,esd,ecnt,ptpostval-ptpreval))
+
+      improve=preavg-eavg
+      oneliner("Improvement {:0.4f} loss units ({:0.4f} units/hour)."
+          .format(improve,improve*3600.0/(ptpostfit-ptprefit)))
+     
+      # Take an optimistic view of what we are doing next
+      saving=True # Saving the model
+      reverting=False # reverting to saved model
+      halving=False # reducing the interleave
+      
+      progch=" " # are we Happy or Sad?
+      if eavg+esd<preavg:
+        progch="H"
+      elif eavg<preavg:
+        progch="h"
+      elif eavg-esd<preavg:
+        progch="s"
+        saving=False
       else:
-        if vloss>tloss:
-          print("Training better than validation.  Hmmm...")
-          failtype=1
-      # Decide about saving model
-      fails+=failtype
-      if fails>=2:
-        if self.interleave==1:
-          print("...Stopping.  Time to train with more data.")
+        progch="S"
+        halving=True
+        reverting=True
+        saving=False
+      self.progress+=progch
+      if "H" not in self.progress)[-3:]:
+        halving=True
+      if len(self.progress)>25:
+        print("Progress (Happy vs Sad): ..."+self.progress[-20:])
+      else:
+        print("Progress (Happy vs Sad): "+self.progress)
+ 
+      # Deal with halving the interleave
+      newintlv=self.interleave
+      if halving:
+        print("...Decreasing the interleave.")
+        newintlv=newintlv//2
+        if newintlv<1:
+          print("Looks like we aren't learning anything new here.")
           exit()
-        else:
-          print("...Reverting back to saved model.")
-          self.loadproperties()
-          self.loadweights()
-          self.vloss+=100.0
-          self.tloss+=100.0 
-          self.interleave=self.interleave//2
-          self.saveproperties()
-          print("...Reducing interleave to "+str(self.interleave)+".")
-          fails=0
-      else:
-        if failtype==0 or self.vloss>vloss:
-          self.vloss=vloss
-          self.tloss=tloss
-          print("Saving model...")
-          self.saveproperties()
-          self.saveweights()
-          
-          print("Let's ask the model for some random "+self.label+":")
-          wrapsody(" -- ",self.improv())
-          wrapsody(" -- ",self.improv())
 
-          if failtype==0:
-            fails=0
+      # Dealing with revert-to-old-model things
+      if reverting:
+        print("...Reverting back to last good model.")
+        self.loadproperties()
+        self.loadweights()
+        self.interleave=newintlv
+        self.saveproperties()
+      else:
+        self.interleave=newintlv
+  
+      # Dealing with saving model things
+      if saving:  
+        self.epochs+=1
+        self.samples+=tcnt
+
+        print("Saving model...")
+        self.saveproperties()
+        self.saveweights()
+          
+        print("Let's ask the model for some random "+self.label+":")
+        wrapsody(" -- ",self.improv())
+        wrapsody(" -- ",self.improv())
+      # end if saving
     # end while forever 
   # end train
   
@@ -241,8 +265,10 @@ class cortex(object):
       self.interleave=props["interleave"]
       self.epochs=props["epochs"]
       self.samples=props["samples"]
-      self.vloss=props["vloss"]
-      self.tloss=props["tloss"]
+      self.progress=props["progress"]
+      self.valcnt=props["valcnt"]
+      self.valsd=props["valsd"]
+      self.valavg=props["valavg"]
       self.ch2ix=props["vocab"]
       self.label=props["label"]
       self.description=props["description"]
@@ -304,9 +330,11 @@ class cortex(object):
     props["vocab"]=self.ch2ix
     props["interleave"]=self.interleave
     props["epochs"]=self.epochs
+    props["progress"]=self.progress
     props["samples"]=self.samples
-    props["vloss"]=self.vloss
-    props["tloss"]=self.tloss
+    props["valcnt"]=self.valcnt
+    props["valsd"]=self.valsd
+    props["valavg"]=self.valavg
     props["label"]=self.label
     props["description"]=self.description
     with open(propsfn,"w") as f:
@@ -361,45 +389,92 @@ class cortex(object):
   # end finishmsg
 
 
-  def estloss(self,sampsize=2500):
-    """Make a serious attempt to check the model loss"""
-    print("Estimating loss across",sampsize,"samples...",end="")
-    print("\r",end="")
+  def validate(self):
+    """Make a serious attempt to check the model loss.
+
+    This is done by looking at samples spaced across the training set.
+    We keep these samples so subsequent estloss calls with the same
+    sample count use the same samples... so we have a stable measure
+    i.e. if the model doesn't change we get the same loss estimate.
+
+    Returns: 
+      Average perplexity (minus log p) for that set of samples.
+
+
+    """
+    flashline("Estimating loss across {} samples...".format(self.valcnt))
+
+    # Remember sample size and set of samples used to compute loss.
+    # If not there, or not the same # samples as last time, compute
+    # a new set of samples with the correct size.
+    if len(self.valsamps)!=self.valcnt:
+      self.valsamps=[]
+
+      # Choose a skip step that gives us twice as many samples as
+      # we actually need.  This is because we make sure every sample
+      # is unique so we want a generous over-supply
+      imod=self.seqcnt//(2*self.valcnt)
+      if imod<3:
+        imod=1
+      random.shuffle(self.deck)
+
+      i=0
+      for inseq,outch in self.gensamples():
+        i+=1
+        if i%imod==0 and len(self.valsamps)<self.valcnt:
+          cand=inseq+outch
+          if cand not in self.valsamps:
+            self.valsamps.append(cand)
+          # end if this candidate is not already in sample set
+        # end if this might be a good sample to add
+      # end for all samples in the training set
+    # end if we don't already have a sample set for estloss
     
-    imod=self.seqcnt//sampsize
-    if imod<3:
-      imod=1
-    random.shuffle(self.deck)
-    sumnl=0.0
+    # moments of neg log
+    sum0=0.0
     sum1=0.0
+    sum2=0.0
 
-    i=0
-    for inseq,outch in self.gensamples():
-      i+=1
-      if i%imod==0:
-        if sum1%5000==0:
-          print("Looking at sample",(sum1+1),"of",sampsize,"...",end="")
-          print("\r",end="")
-        # compute p, the probability of outch given inseq
-        x=np.zeros((1,self.seqlen,self.vocabsize))
-        for i,ch in enumerate(inseq):
-          x[0, i, self.ch2ix[ch]] = 1
-        ps=self.model.predict(x, verbose=0)[0]
-        p=ps[self.ch2ix[outch]]
+    # Do predict in one huge go
+    x=np.zeros((self.valcnt,self.seqlen,self.vocabsize))
+    y=[]
+    for i in range(self.valcnt):
+      outch=self.valsamps[i][-1:]
+      inseq=self.valsamps[i][:self.seqlen]
+      for j,ch in enumerate(inseq):
+        x[i,j,self.ch2ix[ch]] = 1
+      y.append(self.ch2ix[outch])
+    ps=self.model.predict(x,verbose=0)
+    for i in range(self.valcnt):
+      p=ps[i][y[i]]
 
-        if p<=0.0:
-          p=0.0000001
-        sumnl-=math.log(p)
-        sum1+=1
-      # if this sample is in our test set of size sampsize
-    return sumnl/sum1
-  # end def estloss
+      if p<=0.0:
+        p=0.0000001
+      nl=-math.log(p)
+      sum0+=1.0
+      sum1+=nl
+      sum2+=nl*nl
+    # for all samples in the test set
+
+    # Now turn sum0 / sum1 / sum2 into stats which are more useful
+    #self.valcnt=sum0
+    self.valavg=sum1/sum0
+    sumerr2=sum2-sum1*sum1/sum0
+    if sumerr2<=0.0:
+      self.valsd=0.0
+    else:
+      self.valsd=math.sqrt(sumerr2/(sum0*(sum0-1.0)))
+   
+    return self.valcnt,self.valavg,self.valsd
+  # end def validate
 
 
   def rewrite(self,origmsg):
     """Rewrite a message given a model.
+    Args:
+      origmsg:  Message we are rewriting
     Returns:
-      newmsg: The entire new message
+      newmsg: The new message
     """
 
     words=origmsg.split(" ")
@@ -620,14 +695,34 @@ class beamer(object):
 # end class beamer  
 
 
-# Print a line, the full width of the terminal (filling or trunc'ing if necessary)
 def oneliner(m):
+  """Print a line.  
+  Like print(m) but it fills the line, or truncates if needed, based
+  on current terminal width.  This is used when there are flashline's
+  around so we don't get residual chars at the end of lines.
+  """  
   cols,rows=os.get_terminal_size(0)
   if len(m)>cols-5:
-    print(m[:cols-5]+" ... ")
+    print(m[:cols-5]+"  ...")
   else:
     print(m.ljust(cols))
 # end def oneliner
+
+
+def flashline(m):
+  """Print a line without advancing.
+  This is used to present current state information that might be 
+  continuously updated in place as computation proceeds.  To then
+  present normally, use oneliner so that any chars we have on the
+  line left by flashline get overwritten.
+  """
+  cols,rows=os.get_terminal_size(0)
+  if len(m)>cols-5:
+    print(m[:cols-5]+"  ...",end="")
+  else:
+    print(m.ljust(cols),end="")
+  print("\r",end="")
+# end def flashline
 
 
 # Print prefix + string, wrapping and indenting string if necessary
@@ -672,6 +767,6 @@ def showval(prefix,val):
 
 
 if __name__ == '__main__':
-  intuit()
+  print("What?!  I am normally import'd, not executed.")
 
 
