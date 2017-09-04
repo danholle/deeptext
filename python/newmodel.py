@@ -91,7 +91,7 @@ def newmodel():
   intlv=args["intlv"]
   if intlv==0:
     intlv=1
-    while msgslen/intlv>30000:
+    while msgslen/intlv>15000:
       intlv+=intlv
   print("Initially, we use samples "+str(intlv)+" chars apart in the training "+label+".")
   

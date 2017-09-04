@@ -2,6 +2,10 @@
 
 """Create LSTM model from a message collection."""
 
+# TODO detect and handle the occasional blowups we get
+# where an epoch degrades / diverges dramatically.
+# TODO cap sample count based on available RAM 
+
 from keras.models import Sequential
 from keras.layers import Activation, Dense, LSTM, Dropout
 from keras.optimizers import RMSprop
@@ -12,6 +16,8 @@ import sys
 import os
 import argparse
 import time
+import psutil
+import gc
 import math
 from unidecode import unidecode
 
@@ -92,7 +98,6 @@ class cortex(object):
       self.loadweights()
       self.loadmsgs()
       self.valsamps=[]
-      self.validate()
     else:
       print("cortex:  Invalid constructor.  Specify all or none.")
       exit()
@@ -127,15 +132,52 @@ class cortex(object):
 
   def train(self):
     """Train the model."""    
+    # TODO clean out fails & friends
+
     fails=0
     while True:
-      print('-' * 50)
       tcnt=(self.seqcnt+self.interleave-1)//self.interleave
-      print("Epoch {}:  2xLSTM({}), seqlen {}, interleave {} ({:,d} training samples)"
-          .format(1+self.epochs,self.hidden,self.seqlen,self.interleave,tcnt))
 
-      flashline("Vectorizing...")
+      # To monitor progress in the model, the validate function 
+      # squirrels away a significant (but not comprehensive) 
+      # collection of samples to estimate model loss.  We use these
+      # same samples from iteration to iteration.  This appears to
+      # be a far more stable way of discerning incremental progress
+      # than to try to build an estimator that is extremely accurate.
+      b4cnt=len(self.valsamps) # samples we already have in hand
+      if b4cnt<0.05*tcnt and b4cnt<20000:
+        self.valcnt=int(0.1*tcnt)
+        if self.valcnt>20000:
+          self.valcnt=20000
+        if self.valcnt<2000:
+          self.valcnt=2000
+        self.validate()
+        tsprint("Model loss {:0.3f} (sd {:0.3f}) based on {} samples."
+          .format(self.valavg,self.valsd,self.valcnt))
+
+      tsprint(" ")
+      tsprint("="*50)
+      tsprint(
+          "Epoch {}:  Training {} model, 2xLSTM({}), seqlen {}, starting loss={:0.3f}."
+          .format(1+self.epochs,self.label,self.hidden,self.seqlen,self.valavg))
+      tsprint(
+          "Using interleave {} ({:,d} training samples)."
+          .format(self.interleave,tcnt))
+
+      flashline("Creating one-hot encoding ({}x{}x{} tensor)..."
+          .format(tcnt,self.seqlen,self.vocabsize))
+
       random.shuffle(self.deck)
+
+      # One-Hot Encoding is memory intensive.  Monitor size we
+      # need for this epoch, and compute minimum interleave
+      # we have space for.
+
+      # Check memory before
+      gc.collect()
+      time.sleep(1.0) # is gc async?
+      memb4=psutil.virtual_memory().free/1048576.0
+
       X=np.zeros((tcnt,self.seqlen,self.vocabsize),dtype=np.bool)
       y=np.zeros((tcnt,self.vocabsize),dtype=np.bool)
       seqno=0
@@ -147,98 +189,132 @@ class cortex(object):
           y[tno,self.ch2ix[outch]]=1
           tno+=1
         seqno+=1
-      oneliner("... Training "+self.label
-          +" model with starting loss {:0.3f}".format(self.valavg))
+
+      # Check memory after
+      gc.collect()
+      time.sleep(1.0) # is gc async?
+      memaft=psutil.virtual_memory().free/1048576.0
+      memdelta=memb4-memaft
+      if memdelta<1:
+        memdelta=1
+      memfull=memdelta/memb4
+      maxsamp=int(tcnt*0.9/memfull)
+      tsprint(
+          "One-hot encoding:  {}x{}x{} tensor took {}MB ({}% of memory)."
+          .format(tcnt,self.seqlen,self.vocabsize,int(memdelta),
+          int(100.0*memfull)))
+      self.minterleave=int((self.seqcnt+maxsamp-1)/maxsamp)
+      if self.minterleave<1:
+        self.minterleave=1
+      #tsprint("Max samples given our memory size:  {} (interleave {})"
+      #    .format(maxsamp,self.minterleave))
+      if self.minterleave<2:
+        tsprint("Memory is not a constraint for this model & data.")
+      elif self.minterleave<0.2*self.interleave:
+        tsprint("Memory is not a constraint, at least for a while yet.")
+      else:
+        tsprint("Memory may soon be a limiting factor in training this model.")
 
       ptprefit=time.process_time()
+      pcprefit=time.perf_counter()
       hist=self.model.fit(X, y, batch_size=128, epochs=1)
       ptpostfit=time.process_time()
-      oneliner("... Training took {:0.3f} process seconds."
-          .format(ptpostfit-ptprefit))
+      pcpostfit=time.perf_counter()
+      
+      # Free up memory NOW so it's there for next iteration
+      X=None 
+      y=None
 
-      # Well, okay, that was the hard part.  Now we compute validation
-      # loss (and its SD!) and proceed as follows:
-      #  1.  If we've improved by more than 1 SD, life is good.  We 
-      #      save everything and keep on trucking.
-      #  2.  If we've regressed by more than 1 SD, life is shit.  We
-      #      restore the last model and double the number of training
-      #      samples (halve the interleave) if we can.  If we can't,
-      #      we give up.
-      #  3.  If we are muddling in the middle, then we double the 
-      #      validation size, recompute validation loss, and save
-      #      everything as if we were doing #1.  If we can't, we also
-      #      give up.
+      felapsed=pcpostfit-pcprefit
+      process=ptpostfit-ptprefit
+      tsprint(
+          "Training took {:0.3f} elapsed seconds using {:.2f} threads."
+          .format(felapsed,process/felapsed))
+
+      # Look at the new model loss.
       preavg=self.valavg
       presd=self.valsd
       precnt=self.valcnt
-      prech=self.progress[-1:]
       
-      ptpreval=time.process_time()
-      ecnt,eavg,esd=self.validate()
-      ptpostval=time.process_time()
-      
-      oneliner("New model loss {:0.3f} (sd {:0.3f}) based on {} samples in {:0.3f} seconds."
-          .format(eavg,esd,ecnt,ptpostval-ptpreval))
+      pcpreval=time.perf_counter()
+      currcnt,curravg,currsd=self.validate()
+      pcpostval=time.perf_counter()
+      velapsed=pcpostval-pcpreval
+      tsprint(
+          "New model loss {:0.3f} (sd {:0.3f}, {} samples, {:0.3f} seconds)."
+          .format(curravg,currsd,currcnt,velapsed))
 
-      improve=preavg-eavg
-      oneliner("Improvement {:0.4f} loss units ({:0.4f} units/hour)."
-          .format(improve,improve*3600.0/(ptpostfit-ptprefit)))
+      improve=preavg-curravg
+      tsprint("Improvement {:0.4f} loss units ({:0.4f} units/hour)."
+          .format(improve,improve*3600.0/felapsed))
      
+      # Now decide how to proceed based on the new model loss.
+      #  1.  If we improved by at least 0.01, we are Happy; save 
+      #      everything and continue normally.
+      #  2.  If we DEGRADED by at least 0.01, we are Sad;  we've
+      #      presumably experienced one of those optimization blowups 
+      #      that seem to happen from time to time, and revert back 
+      #      to previous model and try again (changing nothing else)
+      #  3.  Otherwise, we are Meh.  We don't save the new model. 
+      # 
+      #  If we are not Happy for twice in a row, we halve the 
+      #  interleave (doubling the samples per epoch).  
+
       # Take an optimistic view of what we are doing next
       saving=True # Saving the model
       reverting=False # reverting to saved model
       halving=False # reducing the interleave
       
       progch=" " # are we Happy or Sad?
-      if eavg+esd<preavg:
+      if improve>0.01:
         progch="H"
-      elif eavg<preavg:
-        progch="h"
-      elif eavg-esd<preavg:
-        progch="s"
-        saving=False
-      else:
+      elif improve<-0.01:
         progch="S"
-        halving=True
+        saving=False
         reverting=True
+      else:
+        progch="M"
         saving=False
       self.progress+=progch
-      if "H" not in self.progress)[-3:]:
+      if "H" not in self.progress[-2:]:
         halving=True
       if len(self.progress)>25:
-        print("Progress (Happy vs Sad): ..."+self.progress[-20:])
+        tsprint("Progress (Happy vs Sad): ..."+self.progress[-20:])
       else:
-        print("Progress (Happy vs Sad): "+self.progress)
+        tsprint("Progress (Happy vs Sad): "+self.progress)
  
       # Deal with halving the interleave
       newintlv=self.interleave
       if halving:
-        print("...Decreasing the interleave.")
         newintlv=newintlv//2
-        if newintlv<1:
-          print("Looks like we aren't learning anything new here.")
+        if newintlv<self.minterleave:
+          newintlv=self.minterleave
+        if newintlv>=self.interleave:
+          tsprint("Looks like we aren't learning anything new here.")
           exit()
+        else:
+          tsprint("Decreasing the interleave from {} to {}."
+              .format(self.interleave,newintlv))
+          self.interleave=newintlv
+      # if halving
 
       # Dealing with revert-to-old-model things
       if reverting:
-        print("...Reverting back to last good model.")
+        tsprint("Reverting back to last good model.")
         self.loadproperties()
+        self.progress+=progch
         self.loadweights()
-        self.interleave=newintlv
-        self.saveproperties()
-      else:
-        self.interleave=newintlv
   
       # Dealing with saving model things
       if saving:  
         self.epochs+=1
         self.samples+=tcnt
 
-        print("Saving model...")
+        tsprint("Saving the new, improved model...")
         self.saveproperties()
         self.saveweights()
           
-        print("Let's ask the model for some random "+self.label+":")
+        tsprint("Let's ask the model for some random "+self.label+":")
         wrapsody(" -- ",self.improv())
         wrapsody(" -- ",self.improv())
       # end if saving
@@ -759,6 +835,12 @@ def wrapsody(p,s):
     # end if line length valid
   # end if output line exists
 # end def wrapsody
+
+
+def tsprint(s):
+  """Print a timestamped status message, wrapping politely"""
+  wrapsody(time.strftime("%X")+" ",s)
+# end def tsprint
 
 
 def showval(prefix,val):
