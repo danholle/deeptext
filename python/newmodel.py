@@ -10,6 +10,7 @@ import os
 import argparse
 import deeptext
 import unidecode 
+import signal
 
 def newmodel():
   print()
@@ -148,6 +149,7 @@ def readmsgs(msgsfn,minmsglen,maxmsglen):
 
 
 if __name__ == '__main__':
+  signal.signal(signal.SIGINT,deeptext.goquietly)
   newmodel()
 
 

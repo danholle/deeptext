@@ -4,6 +4,7 @@
 
 import deeptext
 import argparse
+import signal
 import os
 
 
@@ -42,6 +43,7 @@ def study():
 
 
 if __name__ == '__main__':
+  signal.signal(signal.SIGINT,deeptext.goquietly)
   study()
 
 

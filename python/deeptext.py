@@ -2,9 +2,6 @@
 
 """Create LSTM model from a message collection."""
 
-# TODO detect and handle the occasional blowups we get
-# where an epoch degrades / diverges dramatically.
-# TODO cap sample count based on available RAM 
 
 from keras.models import Sequential
 from keras.layers import Activation, Dense, LSTM, Dropout
@@ -107,7 +104,17 @@ class cortex(object):
 
 
   def remodel(self):
-    """Build the model structure in Keras"""
+    """Build the model structure in Keras
+        model = Sequential()
+        model.add(Embedding(max_features, 128, ))
+
+        if depth > 1:
+            for i in range(depth - 1):
+                model.add(LSTM(128, dropout=0.2, recurrent_dropout=0.2, return_sequences=True))
+
+        model.add(LSTM(128, dropout=0.2, recurrent_dropout=0.2))
+        model.add(Dense(1, activation='sigmoid'))
+    """
     self.model=Sequential()
     self.model.add(LSTM(self.hidden, return_sequences=True,
         input_shape=(self.seqlen,self.vocabsize)))
@@ -116,7 +123,22 @@ class cortex(object):
     self.model.add(Dropout(0.2))
     self.model.add(Dense(self.vocabsize,activation='softmax'))
     self.model.compile(loss='categorical_crossentropy', optimizer='adam')
+    self.model.summary()
   # end def remodel
+
+
+  def remodelSRU(self):
+    """Build the model structure in Keras using titu1994 SRU"""
+    self.model=Sequential()
+    self.model.add(LSTM(self.hidden, return_sequences=True,
+        input_shape=(self.seqlen,self.vocabsize)))
+    self.model.add(Dropout(0.2))
+    self.model.add(LSTM(self.hidden))
+    self.model.add(Dropout(0.2))
+    self.model.add(Dense(self.vocabsize,activation='softmax'))
+    self.model.compile(loss='categorical_crossentropy', optimizer='adam')
+    self.model.summary()
+  # end def remodelSRU
 
 
   def gensamples(self):
@@ -155,8 +177,11 @@ class cortex(object):
         tsprint("Model loss {:0.3f} (sd {:0.3f}) based on {} samples."
           .format(self.valavg,self.valsd,self.valcnt))
 
-      tsprint(" ")
-      tsprint("="*50)
+      tshl()
+      #tsprint(" ")
+      #tsprint("*"*50)
+      #tsprint(" ")
+
       tsprint(
           "Epoch {}:  Training {} model, 2xLSTM({}), seqlen {}, starting loss={:0.3f}."
           .format(1+self.epochs,self.label,self.hidden,self.seqlen,self.valavg))
@@ -176,6 +201,8 @@ class cortex(object):
       # Check memory before
       gc.collect()
       time.sleep(1.0) # is gc async?
+      gc.collect()
+      time.sleep(1.0)
       memb4=psutil.virtual_memory().free/1048576.0
 
       X=np.zeros((tcnt,self.seqlen,self.vocabsize),dtype=np.bool)
@@ -193,6 +220,8 @@ class cortex(object):
       # Check memory after
       gc.collect()
       time.sleep(1.0) # is gc async?
+      gc.collect()
+      time.sleep(1.0)
       memaft=psutil.virtual_memory().free/1048576.0
       memdelta=memb4-memaft
       if memdelta<1:
@@ -210,7 +239,7 @@ class cortex(object):
       #    .format(maxsamp,self.minterleave))
       if self.minterleave<2:
         tsprint("Memory is not a constraint for this model & data.")
-      elif self.minterleave<0.2*self.interleave:
+      elif self.minterleave<0.35*self.interleave:
         tsprint("Memory is not a constraint, at least for a while yet.")
       else:
         tsprint("Memory may soon be a limiting factor in training this model.")
@@ -257,8 +286,9 @@ class cortex(object):
       #      to previous model and try again (changing nothing else)
       #  3.  Otherwise, we are Meh.  We don't save the new model. 
       # 
-      #  If we are not Happy for twice in a row, we halve the 
-      #  interleave (doubling the samples per epoch).  
+      # If we are not Happy, and either of the preceeding two
+      # epochs is not happy, we halve the interleave (doubling 
+      # the samples per epoch).  
 
       # Take an optimistic view of what we are doing next
       saving=True # Saving the model
@@ -266,18 +296,19 @@ class cortex(object):
       halving=False # reducing the interleave
       
       progch=" " # are we Happy or Sad?
-      if improve>0.01:
+      if improve>0.003:
         progch="H"
-      elif improve<-0.01:
+      elif improve<-0.003:
         progch="S"
         saving=False
         reverting=True
       else:
         progch="M"
-        saving=False
-      self.progress+=progch
-      if "H" not in self.progress[-2:]:
+        if improve<0.0:
+          saving=False
+      if progch!="H" and self.progress[-2:]!="HH":
         halving=True
+      self.progress+=progch
       if len(self.progress)>25:
         tsprint("Progress (Happy vs Sad): ..."+self.progress[-20:])
       else:
@@ -843,9 +874,28 @@ def tsprint(s):
 # end def tsprint
 
 
+def tshl():
+  """Print timestamped horizontal line cognizant of screen width"""
+  cols,rows=os.get_terminal_size(0)
+  now=time.strftime("%X")
+  print(now)
+  msg=now+" "+"-"*200
+  print(msg[:cols])
+  print(now)
+# end def tshl
+
+
 def showval(prefix,val):
   ''' Display a value '''
   print((prefix+":").ljust(24)+" "+val)
+
+
+def goquietly(signal,frame):
+  print()
+  print()
+  print("Execution interrupted.")
+  print()
+  sys.exit(0)
 
 
 if __name__ == '__main__':
