@@ -316,7 +316,7 @@ class cortex(object):
       # Now decide how to proceed based on the new model loss.
       # Take an optimistic view of what we are doing next
       saving=True     # Saving the model
-      halving=False   # reducing the interleave
+      zoomin=False    # reducing the interleave
       reason="none"
       
       # We are saving if model improved.
@@ -330,7 +330,7 @@ class cortex(object):
         tsprint("Reverting back to last good model.")
         self.loadweights()
         if not self.epochhistory[m1].saved: # 2 in a row = more samps
-          halving=True
+          zoomin=True
           reason="we had two consecutive failed epochs" 
       else: # if saving
         saving=True
@@ -341,30 +341,27 @@ class cortex(object):
         wrapsody(" -- ",self.improv())
         wrapsody(" -- ",self.improv())
 
-        # Three ways we could double the number of samples.
-        # There are at least 3 completed epochs, and
+        # We start with 3 epochs with a small (10-20K) sample set, just
+        # to quickly flush out any problems with the job at hand.
+        # 
+        # From there, we "zoom in" (cut the interleave in half, doubling
+        # the number of samples) under two circumstances:
         #  1.  This epoch took < 300 secs.
-        #  2.  The last 3 (including this) at same interleave, and
-        #        a.  This epoch < 2000 secs, or
-        #        b.  Best improvement of last 3 < 0.005.
-        halving=False
+        #  2.  The last 3 iterations each showed a declining improvement
+        #      in the loss.
         if len(self.epochhistory)>=3 and memfull<0.80:
-          if felapsed<300.0:
-            halving=True
+          if felapsed<150.0:
+            zoomin=True
             reason="epoch is < 5 minutes"
-          elif self.epochhistory[m2].intlv0==self.interleave:
-            if felapsed<1800.0:
-              halving=True
-              reason="3 epochs at old interleave < 20 minutes"
-            else:
-              eh=self.epochhistory[m1]
-              improve1=eh.loss0-eh.loss1
-              eh=self.epochhistory[m2]
-              improve2=eh.loss0-eh.loss1
-              if (improve<0.005) and (improve1<0.005) and (improve2<0.005):
-                halving=true
-                reason="3 slow epochs in a row"
-            # end if 
+          else:
+            eh1=self.epochhistory[m1]
+            improve1=eh1.loss0-eh1.loss1
+            eh2=self.epochhistory[m2]
+            improve2=eh2.loss0-eh2.loss1
+            if (improve2>improve1) and (improve1>improve):
+              zoomin=True
+              reason="we had 3 declining epochs in a row"
+            # end if declining 
           # end if
         # end if we have done 3 or more epochs
       # end if saving
@@ -372,7 +369,7 @@ class cortex(object):
 
       # Deal with halving the interleave
       newintlv=self.interleave
-      if halving:
+      if zoomin:
         newintlv=newintlv//2
         if newintlv<self.minterleave:
           newintlv=self.minterleave
