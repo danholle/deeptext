@@ -350,9 +350,9 @@ class cortex(object):
         #  2.  The last 3 iterations each showed a declining improvement
         #      in the loss.
         if len(self.epochhistory)>=3 and memfull<0.80:
-          if felapsed<150.0:
+          if felapsed<600.0:
             zoomin=True
-            reason="epoch is < 5 minutes"
+            reason="epoch is < 10 minutes"
           else:
             eh1=self.epochhistory[m1]
             improve1=eh1.loss0-eh1.loss1
