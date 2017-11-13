@@ -350,7 +350,7 @@ class cortex(object):
         #  2.  The last 3 iterations each showed a declining improvement
         #      in the loss.
         if len(self.epochhistory)>=3 and memfull<0.80:
-          if felapsed<600.0:
+          if felapsed<150.0:
             zoomin=True
             reason="epoch is < 10 minutes"
           else:
@@ -358,7 +358,8 @@ class cortex(object):
             improve1=eh1.loss0-eh1.loss1
             eh2=self.epochhistory[m2]
             improve2=eh2.loss0-eh2.loss1
-            if (improve2>improve1) and (improve1>improve):
+            if ((intlvcurr==eh1.intlv0) and (intlvcurr==eh2.intlv0)
+            and (improve2>improve1) and (improve1>improve)):
               zoomin=True
               reason="we had 3 declining epochs in a row"
             # end if declining 
@@ -486,10 +487,13 @@ class cortex(object):
       with open(ehfn,"r") as f:
         eh=json.load(f)
         f.close()
+      
+      # json serialization is a bit goofy.
+      # keys MUST be strings (messing up our integer keys), and
+      # namedtuples turn into lists.  We fix it.
       self.epochhistory=dict()
       for key in eh:
         self.epochhistory[int(key)]=self.epochresult(*eh[key])
-
     # end if there is an epoch history file in the model
     
   # end def loadproperties
