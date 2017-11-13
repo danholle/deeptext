@@ -17,13 +17,14 @@ import psutil
 import gc
 import math
 from unidecode import unidecode
+from collections import namedtuple
 
 
 class cortex(object):
   """LSTM network for grokking a message collection."""
 
-  def __init__(self,modeldir,hidden=None,seqlen=None,vocab=None,
-      interleave=None,label=None,description=None,msgs=None):
+  def __init__(self,modeldir,hidden=None,seqlen=None,
+      label=None,description=None,msgs=None):
     """cortex constructor.
     Args:
       modeldir: directory where model resides/is built 
@@ -50,23 +51,53 @@ class cortex(object):
     if not os.path.exists(self.modeldir):
       print("cortex:  Creating model directory "+modeldir+"...")
       os.makedirs(modeldir)
+
+    # epochhistory maps epoch number into an epochresult for that epoch.
+    # Epoch #0 is initialization (before optimization begins)
+    # epochresult contains various stats about the epoch, including
+    #   loss before and after, elapsed time, etc.  (see below)
+    self.epochhistory=dict()
+    self.epochresult=namedtuple("epochresult",[
+        "loss0",   # Validation loss at start using vsamp0 samples 
+        "loss1",   # Validation loss at end using vsamp0 samples
+        "vsamp0",  # Number of samples in validation loss calculations
+        "vsamp1",  # Recommened validation samples for next epoch
+        "intlv0",  # Interleave for this epoch
+        "intlv1",  # Recommended interleave for next epoch
+        "tsamp",   # Number of samples used in training for this epoch
+        "memutil", # Memory utilization of training samples 0..1.0
+        "elapsed", # Elapsed time for epoch in seconds
+        "saved"    # True if weights saved
+      ])
     
-    if (hidden is not None and seqlen is not None and vocab is not
-    None and interleave is not None and label is not None and 
-    description is not None and msgs is not None):
+    if (hidden is not None and seqlen is not None and label is not None
+    and description is not None and msgs is not None):
       # Creating new model
 
       self.hidden=hidden
       self.seqlen=seqlen
+      self.label=label
+      self.description=description
 
-      self.vocab=sorted(list(set(vocab)))
+      propsfn=os.path.join(self.modeldir,"properties.json")
+      props=dict()
+      props["hidden"]=self.hidden
+      props["seqlen"]=self.seqlen
+      props["label"]=self.label
+      props["description"]=self.description
+      with open(propsfn,"w") as f:
+        json.dump(props,f,indent=2,sort_keys=True)
+        f.close()
+
+      self.vocab=sorted(list(set("\n".join(msgs))))
       self.vocabsize=len(self.vocab)
       self.ch2ix=dict((ch,ix) for ix,ch in enumerate(self.vocab))
       self.ix2ch=dict((ix,ch) for ix,ch in enumerate(self.vocab))
 
-      self.interleave=interleave
-      self.label=label
-      self.description=description
+      vocfn=os.path.join(self.modeldir,"vocabulary.json")
+      with open(vocfn,"w") as f:
+        json.dump(self.ch2ix,f,indent=2,sort_keys=True)
+        f.close()
 
       self.msgs=msgs
       self.deck=[i for i in range(len(msgs))]
@@ -74,21 +105,32 @@ class cortex(object):
       self.seqcnt=0
       for msg in self.msgs:
         self.seqcnt+=1+len(msg)
-      
-      self.epochs=0
-      self.samples=0
 
-      self.valcnt=10000
+      # Set interleave so that the initial training set
+      # has between 10K-20K samples
+      self.interleave=1
+      tsampcnt=(self.seqcnt+self.interleave-1)//self.interleave
+      while tsampcnt>20000:
+        self.interleave+=self.interleave
+        tsampcnt=(self.seqcnt+self.interleave-1)//self.interleave
+
       self.valavg=math.log(self.vocabsize)
-      self.valsd=self.valavg*0.05
-      self.progress="..."
       self.remodel()
       self.savemsgs()
-      self.saveproperties()
       self.valsamps=[]
-    elif (hidden is None and seqlen is None and vocab is None
-    and interleave is None and label is None and description is
-    None and msgs is None):
+
+      # Epoch 0 describes state after initialization. 
+      self.epochhistory[0]=self.epochresult(
+        loss0=0.0, loss1=math.log(self.vocabsize),
+        vsamp0=0, vsamp1=2000, intlv0=0, intlv1=self.interleave,
+        tsamp=0, memutil=0.0, elapsed=0, saved=False)
+      ehfn=os.path.join(self.modeldir,"epochhistory.json")
+      with open(ehfn,"w") as f:
+        json.dump(self.epochhistory,f,indent=2,sort_keys=True)
+        f.close()
+
+    elif (hidden is None and seqlen is None and label is None 
+    and description is None and msgs is None):
       # Reading existing model from modeldir 
       self.loadproperties()
       self.remodel()
@@ -156,9 +198,11 @@ class cortex(object):
     """Train the model."""    
     # TODO clean out fails & friends
 
-    fails=0
     while True:
-      tcnt=(self.seqcnt+self.interleave-1)//self.interleave
+      m1=len(self.epochhistory)-1
+      self.interleave=self.epochhistory[m1].intlv1
+      self.vsampcnt=self.epochhistory[m1].vsamp1
+      tsampcnt=(self.seqcnt+self.interleave-1)//self.interleave
 
       # To monitor progress in the model, the validate function 
       # squirrels away a significant (but not comprehensive) 
@@ -167,30 +211,22 @@ class cortex(object):
       # be a far more stable way of discerning incremental progress
       # than to try to build an estimator that is extremely accurate.
       b4cnt=len(self.valsamps) # samples we already have in hand
-      if b4cnt<0.05*tcnt and b4cnt<20000:
-        self.valcnt=int(0.1*tcnt)
-        if self.valcnt>20000:
-          self.valcnt=20000
-        if self.valcnt<2000:
-          self.valcnt=2000
+      if b4cnt!=self.vsampcnt:
         self.validate()
-        tsprint("Model loss {:0.3f} (sd {:0.3f}) based on {} samples."
-          .format(self.valavg,self.valsd,self.valcnt))
+        tsprint("Model loss {:0.3f} based on {} samples."
+          .format(self.valavg,self.vsampcnt))
 
       tshl()
-      #tsprint(" ")
-      #tsprint("*"*50)
-      #tsprint(" ")
 
       tsprint(
           "Epoch {}:  Training {} model, 2xLSTM({}), seqlen {}, starting loss={:0.3f}."
-          .format(1+self.epochs,self.label,self.hidden,self.seqlen,self.valavg))
+          .format(len(self.epochhistory),self.label,self.hidden,self.seqlen,self.valavg))
       tsprint(
           "Using interleave {} ({:,d} training samples)."
-          .format(self.interleave,tcnt))
+          .format(self.interleave,tsampcnt))
 
       flashline("Creating one-hot encoding ({}x{}x{} tensor)..."
-          .format(tcnt,self.seqlen,self.vocabsize))
+          .format(tsampcnt,self.seqlen,self.vocabsize))
 
       random.shuffle(self.deck)
 
@@ -205,8 +241,8 @@ class cortex(object):
       time.sleep(1.0)
       memb4=psutil.virtual_memory().free/1048576.0
 
-      X=np.zeros((tcnt,self.seqlen,self.vocabsize),dtype=np.bool)
-      y=np.zeros((tcnt,self.vocabsize),dtype=np.bool)
+      X=np.zeros((tsampcnt,self.seqlen,self.vocabsize),dtype=np.bool)
+      y=np.zeros((tsampcnt,self.vocabsize),dtype=np.bool)
       seqno=0
       tno=0
       for inseq,outch in self.gensamples():
@@ -227,10 +263,10 @@ class cortex(object):
       if memdelta<1:
         memdelta=1
       memfull=memdelta/memb4
-      maxsamp=int(tcnt*0.9/memfull)
+      maxsamp=int(tsampcnt*0.9/memfull)
       tsprint(
           "One-hot encoding:  {}x{}x{} tensor took {}MB ({}% of memory)."
-          .format(tcnt,self.seqlen,self.vocabsize,int(memdelta),
+          .format(tsampcnt,self.seqlen,self.vocabsize,int(memdelta),
           int(100.0*memfull)))
       self.minterleave=int((self.seqcnt+maxsamp-1)/maxsamp)
       if self.minterleave<1:
@@ -254,6 +290,7 @@ class cortex(object):
       X=None 
       y=None
 
+      intlvcurr=self.interleave
       felapsed=pcpostfit-pcprefit
       process=ptpostfit-ptprefit
       tsprint(
@@ -262,58 +299,77 @@ class cortex(object):
 
       # Look at the new model loss.
       preavg=self.valavg
-      presd=self.valsd
-      precnt=self.valcnt
+      precnt=self.vsampcnt
       
       pcpreval=time.perf_counter()
-      currcnt,curravg,currsd=self.validate()
+      currcnt,curravg=self.validate()
       pcpostval=time.perf_counter()
       velapsed=pcpostval-pcpreval
       tsprint(
-          "New model loss {:0.3f} (sd {:0.3f}, {} samples, {:0.3f} seconds)."
-          .format(curravg,currsd,currcnt,velapsed))
+          "New model loss {:0.3f}, {} samples, {:0.3f} seconds)."
+          .format(curravg,currcnt,velapsed))
 
       improve=preavg-curravg
       tsprint("Improvement {:0.4f} loss units ({:0.4f} units/hour)."
           .format(improve,improve*3600.0/felapsed))
      
       # Now decide how to proceed based on the new model loss.
-      #  1.  If we improved by at least 0.01, we are Happy; save 
-      #      everything and continue normally.
-      #  2.  If we DEGRADED by at least 0.01, we are Sad;  we've
-      #      presumably experienced one of those optimization blowups 
-      #      that seem to happen from time to time, and revert back 
-      #      to previous model and try again (changing nothing else)
-      #  3.  Otherwise, we are Meh.  We don't save the new model. 
-      # 
-      # If we are not Happy, and either of the preceeding two
-      # epochs is not happy, we halve the interleave (doubling 
-      # the samples per epoch).  
-
       # Take an optimistic view of what we are doing next
-      saving=True # Saving the model
-      reverting=False # reverting to saved model
-      halving=False # reducing the interleave
+      saving=True     # Saving the model
+      halving=False   # reducing the interleave
+      reason="none"
       
-      progch=" " # are we Happy or Sad?
-      if improve>0.003:
-        progch="H"
-      elif improve<-0.003:
-        progch="S"
+      # We are saving if model improved.
+      # If not, we are reverting.  Note that the optimization sometimes
+      # gets lost, and ends up with a worse model than before;  this 
+      # seems to be a matter of luck, and reverting / rerunning fixes it.
+      m1=len(self.epochhistory)-1
+      m2=len(self.epochhistory)-2
+      if improve<=0.0:
         saving=False
-        reverting=True
-      else:
-        progch="M"
-        if improve<0.0:
-          saving=False
-      if progch!="H" and self.progress[-2:]!="HH":
-        halving=True
-      self.progress+=progch
-      if len(self.progress)>25:
-        tsprint("Progress (Happy vs Sad): ..."+self.progress[-20:])
-      else:
-        tsprint("Progress (Happy vs Sad): "+self.progress)
- 
+        tsprint("Reverting back to last good model.")
+        self.loadweights()
+        if not self.epochhistory[m1].saved: # 2 in a row = more samps
+          halving=True
+          reason="we had two consecutive failed epochs" 
+      else: # if saving
+        saving=True
+        tsprint("Saving the new, improved model...")
+        self.saveweights()
+          
+        tsprint("Let's ask the model for some random "+self.label+":")
+        wrapsody(" -- ",self.improv())
+        wrapsody(" -- ",self.improv())
+
+        # Three ways we could double the number of samples.
+        # There are at least 3 completed epochs, and
+        #  1.  This epoch took < 300 secs.
+        #  2.  The last 3 (including this) at same interleave, and
+        #        a.  This epoch < 2000 secs, or
+        #        b.  Best improvement of last 3 < 0.005.
+        halving=False
+        if len(self.epochhistory)>=3 and memfull<0.80:
+          if felapsed<300.0:
+            halving=True
+            reason="epoch is < 5 minutes"
+          elif self.epochhistory[m2].intlv0==self.interleave:
+            if felapsed<1800.0:
+              halving=True
+              reason="3 epochs at old interleave < 20 minutes"
+            else:
+              eh=self.epochhistory[m1]
+              improve1=eh.loss0-eh.loss1
+              eh=self.epochhistory[m2]
+              improve2=eh.loss0-eh.loss1
+              if (improve<0.005) and (improve1<0.005) and (improve2<0.005):
+                halving=true
+                reason="3 slow epochs in a row"
+            # end if 
+          # end if
+        # end if we have done 3 or more epochs
+      # end if saving
+
+
       # Deal with halving the interleave
       newintlv=self.interleave
       if halving:
@@ -324,31 +380,74 @@ class cortex(object):
           tsprint("Looks like we aren't learning anything new here.")
           exit()
         else:
-          tsprint("Decreasing the interleave from {} to {}."
-              .format(self.interleave,newintlv))
+          tsprint("Decreasing the interleave from {} to {}, because {}."
+              .format(self.interleave,newintlv,reason))
           self.interleave=newintlv
+        # end if
       # if halving
 
-      # Dealing with revert-to-old-model things
-      if reverting:
-        tsprint("Reverting back to last good model.")
-        self.loadproperties()
-        self.progress+=progch
-        self.loadweights()
-  
-      # Dealing with saving model things
-      if saving:  
-        self.epochs+=1
-        self.samples+=tcnt
 
-        tsprint("Saving the new, improved model...")
-        self.saveproperties()
-        self.saveweights()
-          
-        tsprint("Let's ask the model for some random "+self.label+":")
-        wrapsody(" -- ",self.improv())
-        wrapsody(" -- ",self.improv())
-      # end if saving
+      # Compute validation sample count for next iteration
+      tsampcntnew=(self.seqcnt+self.interleave-1)//self.interleave
+      vsampnew=int(0.1*tsampcnt)
+      if vsampnew>=20000:
+        vsampnew=20000
+      elif vsampnew>=10000:
+        vsampnew=10000
+      elif vsampnew>=5000:
+        vsampnew=5000
+      else:
+        vsampnew=2000
+      
+      self.epochhistory[len(self.epochhistory)]=self.epochresult(
+        loss0=preavg, loss1=curravg, vsamp0=currcnt, vsamp1=vsampnew, 
+        intlv0=intlvcurr, intlv1=self.interleave, tsamp=tsampcnt, 
+        memutil=memfull, elapsed=felapsed, saved=saving)
+      ehfn=os.path.join(self.modeldir,"epochhistory.json")
+      with open(ehfn,"w") as f:
+        json.dump(self.epochhistory,f,indent=2,sort_keys=True)
+        f.close()
+
+      # Display recent progress here
+      titleline="Recent progress summary:"
+      epochline="  Epoch      "
+      intlvline="  Interleave "
+      tsampline="  # Samples  "
+      memline  ="  % Memory   "
+      timeline ="  Seconds    "
+      elossline="  Loss@end   "
+      progline ="  Progress   "
+      uphline  ="  Prog/Hour  "
+    
+      m=len(self.epochhistory)-1
+      n=0
+      while m>0 and n<6:
+        eh=self.epochhistory[m]
+        epochline+="{:9d}".format(m)
+        intlvline+="{:9d}".format(eh.intlv0)
+        elossline+="{:9.4f}".format(eh.loss1)
+        progline+="{:9.4f}".format(eh.loss0-eh.loss1)
+        uphline+="{:9.4f}".format((eh.loss0-eh.loss1)*3600.0/eh.elapsed)
+        timeline+="{:9.1f}".format(eh.elapsed)
+        tsampline+="{:9d}".format(eh.tsamp) 
+        memline+="{:8.2f}".format(eh.memutil*100.0)+"%" 
+        m-=1
+        n+=1
+      # end while
+     
+      tsprint(" ")
+      tsprint(titleline)
+      tsprint(epochline)
+      tsprint(intlvline)
+      tsprint(tsampline)
+      tsprint(memline)
+      tsprint(timeline)
+      tsprint(elossline)
+      tsprint(progline)
+      tsprint(uphline)
+      
+
+
     # end while forever 
   # end train
   
@@ -362,6 +461,7 @@ class cortex(object):
 
 
   def loadproperties(self):
+ 
     propsfn=os.path.join(self.modeldir,"properties.json")
     if os.path.isfile(propsfn):
       with open(propsfn,"r") as f:
@@ -369,19 +469,32 @@ class cortex(object):
         f.close()
       self.hidden=props["hidden"]
       self.seqlen=props["seqlen"]
-      self.interleave=props["interleave"]
-      self.epochs=props["epochs"]
-      self.samples=props["samples"]
-      self.progress=props["progress"]
-      self.valcnt=props["valcnt"]
-      self.valsd=props["valsd"]
-      self.valavg=props["valavg"]
-      self.ch2ix=props["vocab"]
       self.label=props["label"]
       self.description=props["description"]
+    # end if there is a properties file in the model
+
+
+    vocfn=os.path.join(self.modeldir,"vocabulary.json")
+    if os.path.isfile(vocfn):
+      with open(vocfn,"r") as f:
+        self.ch2ix=json.load(f)
+        f.close()
       self.vocabsize=len(self.ch2ix)
       self.ix2ch=dict((self.ch2ix[ch],ch) for ch in self.ch2ix)
-    # end if there is a properties file in the model
+    # end if there is a vocabulary file in the model
+
+
+    ehfn=os.path.join(self.modeldir,"epochhistory.json")
+    if os.path.isfile(ehfn):
+      with open(ehfn,"r") as f:
+        eh=json.load(f)
+        f.close()
+      self.epochhistory=dict()
+      for key in eh:
+        self.epochhistory[int(key)]=self.epochresult(*eh[key])
+
+    # end if there is an epoch history file in the model
+    
   # end def loadproperties
 
 
@@ -413,41 +526,10 @@ class cortex(object):
   # end def loadmsgs
 
 
-  def save(self):
-    self.saveweights()
-    self.saveproperties()
-    self.savemsgs()
-  # end def save
-
-  
   def saveweights(self):
     weightsfn=os.path.join(self.modeldir,"weights.hdf5")
     self.model.save_weights(weightsfn)
   # end def saveweights
-
-
-  def saveproperties(self):
-    """Write the properties.json file in the model directory"""
-
-    propsfn=os.path.join(self.modeldir,"properties.json")
-
-    props=dict()
-    props["hidden"]=self.hidden
-    props["seqlen"]=self.seqlen
-    props["vocab"]=self.ch2ix
-    props["interleave"]=self.interleave
-    props["epochs"]=self.epochs
-    props["progress"]=self.progress
-    props["samples"]=self.samples
-    props["valcnt"]=self.valcnt
-    props["valsd"]=self.valsd
-    props["valavg"]=self.valavg
-    props["label"]=self.label
-    props["description"]=self.description
-    with open(propsfn,"w") as f:
-      json.dump(props,f,indent=2,sort_keys=True)
-      f.close()
-  # end def saveproperties
 
 
   def savemsgs(self):
@@ -509,18 +591,18 @@ class cortex(object):
 
 
     """
-    flashline("Estimating loss across {} samples...".format(self.valcnt))
+    flashline("Estimating loss across {} samples...".format(self.vsampcnt))
 
     # Remember sample size and set of samples used to compute loss.
     # If not there, or not the same # samples as last time, compute
     # a new set of samples with the correct size.
-    if len(self.valsamps)!=self.valcnt:
+    if len(self.valsamps)!=self.vsampcnt:
       self.valsamps=[]
 
       # Choose a skip step that gives us twice as many samples as
       # we actually need.  This is because we make sure every sample
       # is unique so we want a generous over-supply
-      imod=self.seqcnt//(2*self.valcnt)
+      imod=self.seqcnt//(2*self.vsampcnt)
       if imod<3:
         imod=1
       random.shuffle(self.deck)
@@ -528,7 +610,7 @@ class cortex(object):
       i=0
       for inseq,outch in self.gensamples():
         i+=1
-        if i%imod==0 and len(self.valsamps)<self.valcnt:
+        if i%imod==0 and len(self.valsamps)<self.vsampcnt:
           cand=inseq+outch
           if cand not in self.valsamps:
             self.valsamps.append(cand)
@@ -540,19 +622,18 @@ class cortex(object):
     # moments of neg log
     sum0=0.0
     sum1=0.0
-    sum2=0.0
 
     # Do predict in one huge go
-    x=np.zeros((self.valcnt,self.seqlen,self.vocabsize))
+    x=np.zeros((self.vsampcnt,self.seqlen,self.vocabsize))
     y=[]
-    for i in range(self.valcnt):
+    for i in range(self.vsampcnt):
       outch=self.valsamps[i][-1:]
       inseq=self.valsamps[i][:self.seqlen]
       for j,ch in enumerate(inseq):
         x[i,j,self.ch2ix[ch]] = 1
       y.append(self.ch2ix[outch])
     ps=self.model.predict(x,verbose=0)
-    for i in range(self.valcnt):
+    for i in range(self.vsampcnt):
       p=ps[i][y[i]]
 
       if p<=0.0:
@@ -560,19 +641,12 @@ class cortex(object):
       nl=-math.log(p)
       sum0+=1.0
       sum1+=nl
-      sum2+=nl*nl
     # for all samples in the test set
 
     # Now turn sum0 / sum1 / sum2 into stats which are more useful
-    #self.valcnt=sum0
     self.valavg=sum1/sum0
-    sumerr2=sum2-sum1*sum1/sum0
-    if sumerr2<=0.0:
-      self.valsd=0.0
-    else:
-      self.valsd=math.sqrt(sumerr2/(sum0*(sum0-1.0)))
    
-    return self.valcnt,self.valavg,self.valsd
+    return self.vsampcnt,self.valavg
   # end def validate
 
 

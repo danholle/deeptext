@@ -17,7 +17,6 @@ def newmodel():
 
   ap = argparse.ArgumentParser()
   ap.add_argument('-msgsfn', default=None)
-  ap.add_argument('-intlv', type=int,default=0)
   ap.add_argument('-hidden', type=int,default=0)
   ap.add_argument('-seqlen', type=int,default=60)
   ap.add_argument('-minmsglen',type=int,default=0)
@@ -79,7 +78,7 @@ def newmodel():
     print("That's pretty silly if you think about it...")
     exit()
 
-  vocab,msgslen,msgs=readmsgs(msgsfn,minmsglen,maxmsglen)
+  msgslen,msgs=readmsgs(msgsfn,minmsglen,maxmsglen)
   print(("{:,d} "+label+" ({:,d} characters).").format(len(msgs),msgslen))
  
   # TODO I need to check these and provide defaults etc.
@@ -89,19 +88,11 @@ def newmodel():
   seqlen=args["seqlen"]
   print("The model will predict the next character based on the preceeding "+str(seqlen)+".")
 
-  intlv=args["intlv"]
-  if intlv==0:
-    intlv=1
-    while msgslen/intlv>15000:
-      intlv+=intlv
-  print("Initially, we use samples "+str(intlv)+" chars apart in the training "+label+".")
-  
   # build the model: 2 LSTM layers
   print()
   print("Creating new "+label+" model at "+modeldir+".")
   alienbrain=deeptext.cortex(modeldir,hidden=hidden,seqlen=seqlen,
-      vocab=vocab,interleave=intlv,label=label,
-      description=description,msgs=msgs)
+      label=label,description=description,msgs=msgs)
   alienbrain.train()
 
 # end def newmodel
@@ -121,7 +112,6 @@ def readmsgs(msgsfn,minmsglen,maxmsglen):
     exit()
 
   text=unidecode.unidecode(text)
-  vocab=sorted(list(set(text)))
   rawmsgs=text.split("\n")
   text=None
 
@@ -142,7 +132,7 @@ def readmsgs(msgsfn,minmsglen,maxmsglen):
   # for each raw message
   rawmsgs=None
 
-  return vocab,msgslen,msgs
+  return msgslen,msgs
 
 # end def readmsgs
 
