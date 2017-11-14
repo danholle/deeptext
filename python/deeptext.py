@@ -2,6 +2,8 @@
 
 """Create LSTM model from a message collection."""
 
+# TODO remove vsamp stuff from epochresult.
+# TODO clean up naming:  memfull/util, vsamps, etc
 
 from keras.models import Sequential
 from keras.layers import Activation, Dense, LSTM, Dropout
@@ -21,7 +23,44 @@ from collections import namedtuple
 
 
 class cortex(object):
-  """LSTM network for grokking a message collection."""
+  """LSTM network for grokking a message collection.
+  
+  Attributes:
+    ch2ix (dict):  Maps chars to char# in vocab
+    deck (
+    description (str):  One line description of the message data
+      we're using.
+    epochhistory (dict):  Maps epoch# into an epochresult which
+      describes what happened in that epoch.  Failed epochs
+      (where optimization got lost) are included.
+    hidden (int):  Number of hidden units in each LSTM layer
+    interleave (int): Number of chars skipped between samples
+    ix2ch (dict): maps vocab char# to actual char 
+    label (str):  One word describing what we're modeling, e.g.
+      jokes, tweets, quotes, headlines, ...
+    modeldir (str):  Directory where the model is saved.  In this 
+      directory you'll find files like
+        epochhistory.json
+        msgs.txt
+        properties.json
+        weights.hdf5
+    msgs (list):  Messages in training data.  Trimmed, no 
+      newlines
+    seqcnt (int):  Total chars in training data.  We include
+      one virtual newline in addition to string in msgs
+    seqlen (int):  Number of chars in the input string to the
+      function we are learning.  Moving window, if you like.    
+    tsampcnt:  Number of training samples in this epoch
+    valavg (real): average(-log(p)) across all vsampcnt samples
+      samples in valsamps
+    valsamps (list):  Validation set.  Each list item is a 
+      string seqlen+1 chars long;
+    vocab (str):  all the distinct chars found in msgs
+    vocabsize (int):  Number of distinct characters
+    vsampcnt (int):  Number of samples in the validation set
+
+
+  """
 
   def __init__(self,modeldir,hidden=None,seqlen=None,
       label=None,description=None,msgs=None):
@@ -107,12 +146,12 @@ class cortex(object):
         self.seqcnt+=1+len(msg)
 
       # Set interleave so that the initial training set
-      # has between 10K-20K samples
+      # has around 20K samples
       self.interleave=1
-      tsampcnt=(self.seqcnt+self.interleave-1)//self.interleave
-      while tsampcnt>20000:
-        self.interleave+=self.interleave
-        tsampcnt=(self.seqcnt+self.interleave-1)//self.interleave
+      self.tsampcnt=self.seqcnt
+      if self.tsampcnt>30000:
+        self.interleave=(self.seqcnt+10000)//20000
+        self.tsampcnt=(self.seqcnt+self.interleave-1)//self.interleave
 
       self.valavg=math.log(self.vocabsize)
       self.remodel()
@@ -199,10 +238,10 @@ class cortex(object):
     # TODO clean out fails & friends
 
     while True:
-      m1=len(self.epochhistory)-1
-      self.interleave=self.epochhistory[m1].intlv1
-      self.vsampcnt=self.epochhistory[m1].vsamp1
-      tsampcnt=(self.seqcnt+self.interleave-1)//self.interleave
+      ehlast=self.epochhistory[len(self.epochhistory)-1] # last epoch's result
+      self.interleave=ehlast.intlv1
+      self.vsampcnt=ehlast.vsamp1
+      self.tsampcnt=(self.seqcnt+self.interleave-1)//self.interleave
 
       # To monitor progress in the model, the validate function 
       # squirrels away a significant (but not comprehensive) 
@@ -210,11 +249,17 @@ class cortex(object):
       # same samples from iteration to iteration.  This appears to
       # be a far more stable way of discerning incremental progress
       # than to try to build an estimator that is extremely accurate.
+      #
+      # First time through, valsamps is empty.  The code which follows
+      # calculates the validation loss, which causes valsamps to be
+      # set up with the desired number of validation samples, which 
+      # reuse (per the above) as a stable loss measure.
       b4cnt=len(self.valsamps) # samples we already have in hand
       if b4cnt!=self.vsampcnt:
         self.validate()
-        tsprint("Model loss {:0.3f} based on {} samples."
-          .format(self.valavg,self.vsampcnt))
+        tsprint(" ")
+        tsprint("Captured {} samples for validation.  Resulting loss is {:0.3f}."
+          .format(self.vsampcnt,self.valavg))
 
       tshl()
 
@@ -223,10 +268,10 @@ class cortex(object):
           .format(len(self.epochhistory),self.label,self.hidden,self.seqlen,self.valavg))
       tsprint(
           "Using interleave {} ({:,d} training samples)."
-          .format(self.interleave,tsampcnt))
+          .format(self.interleave,self.tsampcnt))
 
       flashline("Creating one-hot encoding ({}x{}x{} tensor)..."
-          .format(tsampcnt,self.seqlen,self.vocabsize))
+          .format(self.tsampcnt,self.seqlen,self.vocabsize))
 
       random.shuffle(self.deck)
 
@@ -241,8 +286,8 @@ class cortex(object):
       time.sleep(1.0)
       memb4=psutil.virtual_memory().free/1048576.0
 
-      X=np.zeros((tsampcnt,self.seqlen,self.vocabsize),dtype=np.bool)
-      y=np.zeros((tsampcnt,self.vocabsize),dtype=np.bool)
+      X=np.zeros((self.tsampcnt,self.seqlen,self.vocabsize),dtype=np.bool)
+      y=np.zeros((self.tsampcnt,self.vocabsize),dtype=np.bool)
       seqno=0
       tno=0
       for inseq,outch in self.gensamples():
@@ -263,10 +308,10 @@ class cortex(object):
       if memdelta<1:
         memdelta=1
       memfull=memdelta/memb4
-      maxsamp=int(tsampcnt*0.9/memfull)
+      maxsamp=int(self.tsampcnt*0.9/memfull)
       tsprint(
           "One-hot encoding:  {}x{}x{} tensor took {}MB ({}% of memory)."
-          .format(tsampcnt,self.seqlen,self.vocabsize,int(memdelta),
+          .format(self.tsampcnt,self.seqlen,self.vocabsize,int(memdelta),
           int(100.0*memfull)))
       self.minterleave=int((self.seqcnt+maxsamp-1)/maxsamp)
       if self.minterleave<1:
@@ -350,7 +395,7 @@ class cortex(object):
         #  2.  The last 3 iterations each showed a declining improvement
         #      in the loss.
         if len(self.epochhistory)>=3 and memfull<0.80:
-          if felapsed<150.0:
+          if felapsed<600.0:
             zoomin=True
             reason="epoch is < 10 minutes"
           else:
@@ -387,19 +432,13 @@ class cortex(object):
 
       # Compute validation sample count for next iteration
       tsampcntnew=(self.seqcnt+self.interleave-1)//self.interleave
-      vsampnew=int(0.1*tsampcnt)
-      if vsampnew>=20000:
-        vsampnew=20000
-      elif vsampnew>=10000:
+      vsampnew=2000
+      if tsampcntnew>100000:
         vsampnew=10000
-      elif vsampnew>=5000:
-        vsampnew=5000
-      else:
-        vsampnew=2000
       
       self.epochhistory[len(self.epochhistory)]=self.epochresult(
         loss0=preavg, loss1=curravg, vsamp0=currcnt, vsamp1=vsampnew, 
-        intlv0=intlvcurr, intlv1=self.interleave, tsamp=tsampcnt, 
+        intlv0=intlvcurr, intlv1=self.interleave, tsamp=self.tsampcnt, 
         memutil=memfull, elapsed=felapsed, saved=saving)
       ehfn=os.path.join(self.modeldir,"epochhistory.json")
       with open(ehfn,"w") as f:
@@ -443,9 +482,7 @@ class cortex(object):
       tsprint(elossline)
       tsprint(progline)
       tsprint(uphline)
-      
-
-
+  
     # end while forever 
   # end train
   
@@ -471,7 +508,6 @@ class cortex(object):
       self.description=props["description"]
     # end if there is a properties file in the model
 
-
     vocfn=os.path.join(self.modeldir,"vocabulary.json")
     if os.path.isfile(vocfn):
       with open(vocfn,"r") as f:
@@ -480,7 +516,6 @@ class cortex(object):
       self.vocabsize=len(self.ch2ix)
       self.ix2ch=dict((self.ch2ix[ch],ch) for ch in self.ch2ix)
     # end if there is a vocabulary file in the model
-
 
     ehfn=os.path.join(self.modeldir,"epochhistory.json")
     if os.path.isfile(ehfn):
