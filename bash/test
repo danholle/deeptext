@@ -1,0 +1,14 @@
+#!/bin/bash
+rm -rf models/testquotes
+cp models/quotes/msgs.txt testquotes.txt
+echo " "
+echo "Let this run for a few epochs, then ctrl-c out of it and try:"
+echo "  bash/study testq"
+echo "and hopefully it will resume correctly..."
+echo " "
+bash/newmodel testquotes testquotes.txt 64 32 testquotes "Test topic for deeptext"
+echo " "
+echo "Now you could say 'bash/study testquotes' to continue, or "
+echo "'bash/untest' to clean up."
+echo " "
+

@@ -255,22 +255,22 @@ class cortex(object):
       # set up with the desired number of validation samples, which 
       # reuse (per the above) as a stable loss measure.
       b4cnt=len(self.valsamps) # samples we already have in hand
-      if b4cnt!=self.vsampcnt:
+      if b4cnt!=self.vsampcnt or not ehlast.saved:
         self.validate()
         tsprint(" ")
-        tsprint("Captured {} samples for validation.  Resulting loss is {:0.3f}."
+        tsprint("Captured {:,d} samples for validation.  Resulting loss is {:0.4f}."
           .format(self.vsampcnt,self.valavg))
 
       tshl()
 
       tsprint(
-          "Epoch {}:  Training {} model, 2xLSTM({}), seqlen {}, starting loss={:0.3f}."
+          "Epoch {}:  Training {} model, 2xLSTM({}), seqlen {}, starting loss={:0.4f}."
           .format(len(self.epochhistory),self.label,self.hidden,self.seqlen,self.valavg))
       tsprint(
           "Using interleave {} ({:,d} training samples)."
           .format(self.interleave,self.tsampcnt))
 
-      flashline("Creating one-hot encoding ({}x{}x{} tensor)..."
+      flashline("Creating one-hot encoding ({:,d}x{}x{} tensor)..."
           .format(self.tsampcnt,self.seqlen,self.vocabsize))
 
       random.shuffle(self.deck)
@@ -310,13 +310,13 @@ class cortex(object):
       memfull=memdelta/memb4
       maxsamp=int(self.tsampcnt*0.9/memfull)
       tsprint(
-          "One-hot encoding:  {}x{}x{} tensor took {}MB ({}% of memory)."
+          "One-hot encoding:  {:,d}x{}x{} tensor took {:,d}MB ({:0.1f}% of memory)."
           .format(self.tsampcnt,self.seqlen,self.vocabsize,int(memdelta),
           int(100.0*memfull)))
       self.minterleave=int((self.seqcnt+maxsamp-1)/maxsamp)
       if self.minterleave<1:
         self.minterleave=1
-      #tsprint("Max samples given our memory size:  {} (interleave {})"
+      #tsprint("Max samples given our memory size:  {:,d} (interleave {})"
       #    .format(maxsamp,self.minterleave))
       if self.minterleave<2:
         tsprint("Memory is not a constraint for this model & data.")
@@ -339,7 +339,7 @@ class cortex(object):
       felapsed=pcpostfit-pcprefit
       process=ptpostfit-ptprefit
       tsprint(
-          "Training took {:0.3f} elapsed seconds using {:.2f} threads."
+          "Training took {:0.1f} elapsed seconds using {:.1f} CPU threads."
           .format(felapsed,process/felapsed))
 
       # Look at the new model loss.
@@ -351,7 +351,7 @@ class cortex(object):
       pcpostval=time.perf_counter()
       velapsed=pcpostval-pcpreval
       tsprint(
-          "New model loss {:0.3f}, {} samples, {:0.3f} seconds)."
+          "New model loss {:0.4f}, {:,d} samples, {:0.1f} seconds)."
           .format(curravg,currcnt,velapsed))
 
       improve=preavg-curravg
@@ -386,7 +386,7 @@ class cortex(object):
         wrapsody(" -- ",self.improv())
         wrapsody(" -- ",self.improv())
 
-        # We start with 3 epochs with a small (10-20K) sample set, just
+        # We start with 2 epochs with a small (~20K) sample set, just
         # to quickly flush out any problems with the job at hand.
         # 
         # From there, we "zoom in" (cut the interleave in half, doubling
@@ -394,7 +394,7 @@ class cortex(object):
         #  1.  This epoch took < 300 secs.
         #  2.  The last 3 iterations each showed a declining improvement
         #      in the loss.
-        if len(self.epochhistory)>=3 and memfull<0.80:
+        if len(self.epochhistory)>=2 and memfull<0.80:
           if felapsed<600.0:
             zoomin=True
             reason="epoch is < 10 minutes"
@@ -433,8 +433,8 @@ class cortex(object):
       # Compute validation sample count for next iteration
       tsampcntnew=(self.seqcnt+self.interleave-1)//self.interleave
       vsampnew=2000
-      if tsampcntnew>100000:
-        vsampnew=10000
+      while tsampcntnew>20*vsampnew:
+        vsampnew+=2000
       
       self.epochhistory[len(self.epochhistory)]=self.epochresult(
         loss0=preavg, loss1=curravg, vsamp0=currcnt, vsamp1=vsampnew, 
@@ -447,27 +447,27 @@ class cortex(object):
 
       # Display recent progress here
       titleline="Recent progress summary:"
-      epochline="  Epoch      "
-      intlvline="  Interleave "
-      tsampline="  # Samples  "
-      memline  ="  % Memory   "
-      timeline ="  Seconds    "
-      elossline="  Loss@end   "
-      progline ="  Progress   "
-      uphline  ="  Prog/Hour  "
+      epochline="  Epoch       "
+      intlvline="  Interleave  "
+      tsampline="  # Samples   "
+      memline  ="  % Memory    "
+      timeline ="  Seconds     "
+      elossline="  Loss        "
+      progline ="  Improvement "
+      uphline  ="  Improv/Hour "
     
       m=len(self.epochhistory)-1
       n=0
       while m>0 and n<6:
         eh=self.epochhistory[m]
-        epochline+="{:9d}".format(m)
-        intlvline+="{:9d}".format(eh.intlv0)
-        elossline+="{:9.4f}".format(eh.loss1)
-        progline+="{:9.4f}".format(eh.loss0-eh.loss1)
-        uphline+="{:9.4f}".format((eh.loss0-eh.loss1)*3600.0/eh.elapsed)
-        timeline+="{:9.1f}".format(eh.elapsed)
-        tsampline+="{:9d}".format(eh.tsamp) 
-        memline+="{:8.2f}".format(eh.memutil*100.0)+"%" 
+        epochline+="{:10d}".format(m)
+        intlvline+="{:10d}".format(eh.intlv0)
+        elossline+="{:10.4f}".format(eh.loss1)
+        progline+="{:10.4f}".format(eh.loss0-eh.loss1)
+        uphline+="{:10.4f}".format((eh.loss0-eh.loss1)*3600.0/eh.elapsed)
+        timeline+="{:10.1f}".format(eh.elapsed)
+        tsampline+="{:10,d}".format(eh.tsamp) 
+        memline+="{:9.1f}".format(eh.memutil*100.0)+"%" 
         m-=1
         n+=1
       # end while
@@ -627,7 +627,7 @@ class cortex(object):
 
 
     """
-    flashline("Estimating loss across {} samples...".format(self.vsampcnt))
+    flashline("Estimating loss across {:,d} samples...".format(self.vsampcnt))
 
     # Remember sample size and set of samples used to compute loss.
     # If not there, or not the same # samples as last time, compute

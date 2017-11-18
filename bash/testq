@@ -1,9 +1,0 @@
-#!/bin/bash
-rm -rf models/testq
-echo " "
-echo "Let this run for a few epochs, then ctrl-c out of it and try:"
-echo "  bash/study testq"
-echo "and hopefully it will resume correctly..."
-echo " "
-bash/newmodel testq tquotes.txt 100 30 testq "Test for json changes"
-
