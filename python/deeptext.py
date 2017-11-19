@@ -458,16 +458,16 @@ class cortex(object):
     
       m=len(self.epochhistory)-1
       n=0
-      while m>0 and n<6:
+      while m>0 and n<5:
         eh=self.epochhistory[m]
-        epochline+="{:10d}".format(m)
-        intlvline+="{:10d}".format(eh.intlv0)
-        elossline+="{:10.4f}".format(eh.loss1)
-        progline+="{:10.4f}".format(eh.loss0-eh.loss1)
-        uphline+="{:10.4f}".format((eh.loss0-eh.loss1)*3600.0/eh.elapsed)
-        timeline+="{:10.1f}".format(eh.elapsed)
-        tsampline+="{:10,d}".format(eh.tsamp) 
-        memline+="{:9.1f}".format(eh.memutil*100.0)+"%" 
+        epochline+="{:12d}".format(m)
+        intlvline+="{:12d}".format(eh.intlv0)
+        elossline+="{:12.4f}".format(eh.loss1)
+        progline+="{:12.4f}".format(eh.loss0-eh.loss1)
+        uphline+="{:12.4f}".format((eh.loss0-eh.loss1)*3600.0/eh.elapsed)
+        timeline+="{:12.1f}".format(eh.elapsed)
+        tsampline+="{:12,d}".format(eh.tsamp) 
+        memline+="{:11.1f}".format(eh.memutil*100.0)+"%" 
         m-=1
         n+=1
       # end while
